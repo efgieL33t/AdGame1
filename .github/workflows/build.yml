@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,8 +20,18 @@ jobs:
       - name: Unit tests
         run: ./gradlew --no-daemon testDebugUnitTest
       - name: Build APK
-        run: ./gradlew --no-daemon assembleDebug
+        run: |
+          ./gradlew --no-daemon assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk JewelColoring.apk
       - uses: actions/upload-artifact@v4
         with:
           name: jewel-coloring-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: JewelColoring.apk
+      - name: Publish to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-apk
+          name: Jewel Coloring (latest build)
+          body: "最新ビルドのAPK (${{ github.sha }})"
+          prerelease: true
+          files: JewelColoring.apk
