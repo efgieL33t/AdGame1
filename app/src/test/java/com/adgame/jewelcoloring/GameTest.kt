@@ -7,49 +7,65 @@ import org.junit.Test
 class GameTest {
 
     @Test
-    fun piecesCoverBoardAndAreSingleColor() {
-        for (lv in 1..20) {
-            val level = LevelGenerator.generate(lv)
-            val game = Game(level, seed = lv.toLong())
-            val seen = BooleanArray(level.cells.size)
-            for (p in game.pieces) {
-                assertTrue(p.size in 1..12)
-                val c = level.cells[p[0]]
-                for (i in p) {
-                    assertEquals(c, level.cells[i])
-                    assertTrue(!seen[i])
-                    seen[i] = true
-                }
-            }
-            assertTrue(seen.all { it })
-        }
-    }
-
-    @Test
-    fun everyLevelIsClearable() {
+    fun startHasSameColorCountsAsTarget() {
         for (lv in 1..30) {
-            val game = Game(LevelGenerator.generate(lv), LevelGenerator.capacityFor(lv), seed = lv * 31L + 7)
-            while (!game.isWon && !game.isStuck()) {
-                // トレイに多い色から取る単純な戦略
-                val piece = game.pieces.indices
-                    .filter { game.canTake(it) }
-                    .maxBy { game.trayCount[game.level.cells[game.pieces[it][0]]] * 100 + game.pieces[it].size }
-                game.take(piece)
-                game.resolveClears()
-                assertTrue(game.trayTotal <= game.capacity)
-            }
-            assertTrue("level $lv", game.isWon)
+            val level = LevelGenerator.generate(lv)
+            val a = IntArray(level.palette.size)
+            val b = IntArray(level.palette.size)
+            for (c in level.target) a[c]++
+            for (c in level.start) b[c]++
+            assertTrue("level $lv", a.contentEquals(b))
+            val wrong = level.target.indices.count { level.target[it] != level.start[it] }
+            assertTrue("level $lv wrong=$wrong", wrong >= level.target.size / 5)
         }
     }
 
     @Test
-    fun colorClearsWhenBoardHasNoMore() {
-        val level = Level(2, intArrayOf(0, 0, 1, 1), intArrayOf(0, 1))
-        val game = Game(level, minPiece = 2, maxPiece = 2)
-        game.take(game.pieceAtCell(0, 0))
-        assertEquals(listOf(0 to 2), game.resolveClears())
-        game.take(game.pieceAtCell(0, 1))
-        assertEquals(listOf(1 to 2), game.resolveClears())
+    fun everyLevelIsClearableByTapping() {
+        for (lv in 1..30) {
+            val game = Game(LevelGenerator.generate(lv))
+            var taps = 0
+            while (!game.isWon) {
+                // 動かせるグループを順に探してタップする
+                val cell = (0 until game.n * game.n).first { c ->
+                    game.jewel[c] >= 0 && !game.isCorrect(c) && wouldMove(game, c)
+                }
+                assertTrue(game.move(cell).isNotEmpty())
+                game.autoFill()
+                assertTrue(game.trayTotal <= game.capacity)
+                assertTrue("level $lv too many taps", ++taps < 10_000)
+            }
+        }
+    }
+
+    private fun wouldMove(game: Game, c: Int): Boolean {
+        val color = game.jewel[c]
+        return game.freeSlots > 0 ||
+            (0 until game.n * game.n).any { game.jewel[it] == -1 && game.level.target[it] == color }
+    }
+
+    @Test
+    fun groupMovesDirectlyThenViaTray() {
+        // 正解: 0 0 / 1 1   初期: 1 1 / 0 0
+        val level = Level(2, intArrayOf(0, 0, 1, 1), intArrayOf(1, 1, 0, 0), intArrayOf(0, 1))
+        val game = Game(level, capacity = 2)
+        // 空きが無いので上段の1は2つともトレイへ
+        val first = game.move(0)
+        assertEquals(listOf(Transfer(1, 0, -1), Transfer(1, 1, -1)), first)
+        assertTrue(game.autoFill().isEmpty())
+        // 下段の0は空いた上段へ直接、その後トレイの1が下段へ自動で入る
+        val second = game.move(2)
+        assertEquals(setOf(0, 1), second.map { it.to }.toSet())
+        assertEquals(2, game.autoFill().size)
         assertTrue(game.isWon)
+        assertEquals(2, game.moves)
+    }
+
+    @Test
+    fun trayFullMovesOnlyWhatFits() {
+        val level = Level(2, intArrayOf(0, 0, 1, 1), intArrayOf(1, 1, 0, 0), intArrayOf(0, 1))
+        val game = Game(level, capacity = 1)
+        assertEquals(1, game.move(0).size)
+        assertEquals(1, game.jewel.count { it == 1 })
     }
 }

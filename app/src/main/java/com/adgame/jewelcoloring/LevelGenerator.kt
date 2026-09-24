@@ -33,15 +33,6 @@ object LevelGenerator {
 
     fun colorsFor(level: Int) = min(4 + (level + 1) / 2, 9)
 
-    /** トレイの使える枠数(残りはロック表示)。 */
-    fun capacityFor(level: Int) = when {
-        level <= 2 -> 65
-        level <= 4 -> 55
-        level <= 7 -> 50
-        level <= 11 -> 45
-        else -> 40
-    }
-
     fun generate(level: Int): Level {
         val rng = Random(level * 7919L + 17)
         val n = sizeFor(level)
@@ -81,7 +72,57 @@ object LevelGenerator {
             }
             remap[k]
         }
-        return Level(n, cells, palette.toIntArray())
+        return Level(n, cells, scramble(cells, n, level, rng), palette.toIntArray())
+    }
+
+    /**
+     * 正解の絵をもとに初期配置を作る。
+     * 上下左右・斜めに対称な「軌道」(同じ色になるマスの組)単位で色を入れ替えるので、
+     * 色ごとの個数は変わらず、見た目も対称な模様になる。外枠は正解のまま。
+     */
+    private fun scramble(target: IntArray, n: Int, level: Int, rng: Random): IntArray {
+        val half = n / 2
+        // 入れ替える範囲(レベルが上がるほど広い)
+        val mask = Array(half) { IntArray(half) }
+        val coverage = min(0.6f + level * 0.04f, 0.95f)
+        val inner = (1 until half).sumOf { a -> half - a }
+        var tries = 0
+        while (tries++ < 200) {
+            val covered = (1 until half).sumOf { a -> (a until half).count { b -> mask[a][b] == 1 } }
+            if (covered >= inner * coverage) break
+            drawShape(mask, 1, rng.nextInt(1, max(2, half / 2) + 1), rng)
+        }
+
+        // 軌道の代表 (a, b), a <= b。大きさ(4 か 8)ごとに入れ替える
+        val orbits4 = ArrayList<IntArray>()
+        val orbits8 = ArrayList<IntArray>()
+        for (a in 1 until half) for (b in a until half) {
+            if (mask[a][b] != 1) continue
+            (if (a == b) orbits4 else orbits8).add(intArrayOf(a, b))
+        }
+        val colorOf = { o: IntArray -> target[o[0] * n + o[1]] }
+        val angle = rng.nextFloat() * 2f
+        val keyOf = { o: IntArray -> (half - 1 - o[0]) + (o[1] - o[0]) * angle / half }
+        val assigned = HashMap<Long, Int>()
+        for (orbits in listOf(orbits4, orbits8)) {
+            if (orbits.size < 2) continue
+            val slots = orbits.map { it to keyOf(it) + rng.nextFloat() * 0.3f }.sortedBy { it.second }.map { it.first }
+            // 正解の絵で中心寄りにある色ほど外側へ来るように、色の順番を逆にして流し込む
+            val meanKey = HashMap<Int, Float>()
+            orbits.groupBy(colorOf).forEach { (c, os) -> meanKey[c] = os.map(keyOf).average().toFloat() }
+            val colors = orbits.map(colorOf).sortedByDescending { meanKey[it] }
+            slots.forEachIndexed { i, o -> assigned[o[0] * 1000L + o[1]] = colors[i] }
+        }
+
+        return IntArray(n * n) { i ->
+            val x = i % n
+            val y = i / n
+            val fx = if (x < half) x else n - 1 - x
+            val fy = if (y < half) y else n - 1 - y
+            val a = min(fx, fy)
+            val b = max(fx, fy)
+            assigned[a * 1000L + b] ?: target[i]
+        }
     }
 
     private fun drawShape(q: Array<IntArray>, c: Int, r: Int, rng: Random) {
