@@ -54,6 +54,10 @@ class GameView(context: Context) : View(context) {
     private val sparks = ArrayList<Spark>()
     private val rng = Random(System.nanoTime())
 
+    /** 選んでいる盤面のグループ / トレイの色(-1 = なし)。 */
+    private var selGroup = IntArray(0)
+    private var selTrayColor = -1
+
     private var shakeGroup = IntArray(0)
     private var shakeTime = 0f
     private var message = ""
@@ -105,6 +109,7 @@ class GameView(context: Context) : View(context) {
         flyers.clear()
         sparks.clear()
         shakeGroup = IntArray(0)
+        clearSelection()
         message = ""
         state = State.PLAYING
         stateTime = 0f
@@ -116,52 +121,88 @@ class GameView(context: Context) : View(context) {
     private fun cellX(c: Int) = boardRect.left + (c % game.n + 0.5f) * cell
     private fun cellY(c: Int) = boardRect.top + (c / game.n + 0.5f) * cell
 
+    private fun clearSelection() {
+        selGroup = IntArray(0)
+        selTrayColor = -1
+    }
+
     private fun onTapBoard(x: Float, y: Float) {
         val cx = ((x - boardRect.left) / cell).toInt().coerceIn(0, game.n - 1)
         val cy = ((y - boardRect.top) / cell).toInt().coerceIn(0, game.n - 1)
         val c = cy * game.n + cx
-        if (game.jewel[c] < 0 || incoming[c] || game.isCorrect(c)) return
+        if (incoming[c]) return
 
-        val group = game.groupAt(c)
-        val moves = game.move(c)
-        if (moves.isEmpty()) {
-            shakeGroup = group
-            shakeTime = 0.4f
-            showMessage("トレイがいっぱいです")
-            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        if (game.jewel[c] >= 0) {
+            // ジュエルを選ぶ(同じグループをもう一度タップで解除)
+            val group = game.groupAt(c)
+            val wasSelected = c in selGroup
+            clearSelection()
+            if (group.isNotEmpty() && !wasSelected) selGroup = group
+            if (group.isNotEmpty()) performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
             return
         }
-        if (moves.size < group.size) showMessage("トレイがいっぱいです")
 
+        // 空きマス: 選んでいるジュエルをここへ移す
+        val moves = when {
+            selGroup.isNotEmpty() -> game.moveToBoard(selGroup[0], c)
+            selTrayColor >= 0 -> game.moveFromTray(selTrayColor, c)
+            else -> return
+        }
+        val total = if (selGroup.isNotEmpty()) selGroup.size else moves.size
+        if (moves.isEmpty()) return
+        if (moves.size < total) showMessage("入りきらない分は元の場所に残りました")
         val step = min(0.025f, 0.6f / moves.size)
         moves.forEachIndexed { i, m ->
-            val b = Bead(m.color, cellX(m.from), cellY(m.from), i * step, m.to)
-            b.fromSize = boardBead
-            if (m.to >= 0) {
-                b.tx = cellX(m.to)
-                b.ty = cellY(m.to)
-                incoming[m.to] = true
-                flyers.add(b)
+            val b: Bead
+            if (m.from >= 0) {
+                b = Bead(m.color, cellX(m.from), cellY(m.from), i * step, m.to)
+                b.fromSize = boardBead
             } else {
-                trayBeads.add(b)
+                val src = trayBeads.lastOrNull { it.color == m.color && it.arrived }
+                    ?: trayBeads.last { it.color == m.color }
+                trayBeads.remove(src)
+                b = Bead(m.color, src.x, src.y, i * step, m.to)
+                b.fromSize = trayBead
             }
-        }
-        // 空いたマスにトレイから自動で入れる
-        val fills = game.autoFill()
-        fills.forEachIndexed { i, m ->
-            val src = trayBeads.lastOrNull { it.color == m.color && it.arrived }
-                ?: trayBeads.last { it.color == m.color }
-            trayBeads.remove(src)
-            val b = Bead(m.color, src.x, src.y, 0.15f + i * min(0.02f, 0.5f / fills.size), m.to)
-            b.fromSize = trayBead
             b.tx = cellX(m.to)
             b.ty = cellY(m.to)
+            b.startDist = max(1f, hypot(b.tx - b.x, b.ty - b.y))
             incoming[m.to] = true
             flyers.add(b)
         }
+        clearSelection()
         relayoutTray()
-        for (b in flyers) if (!b.arrived) b.startDist = max(1f, hypot(b.tx - b.x, b.ty - b.y))
         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+    }
+
+    private fun onTapTray(x: Float, y: Float) {
+        if (selGroup.isNotEmpty()) {
+            // 選んでいる盤面のジュエルをトレイへ
+            val moves = game.moveToTray(selGroup[0])
+            if (moves.isEmpty()) {
+                shakeGroup = selGroup
+                shakeTime = 0.4f
+                showMessage("トレイがいっぱいです")
+                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                return
+            }
+            if (moves.size < selGroup.size) showMessage("トレイがいっぱいです")
+            val step = min(0.025f, 0.6f / moves.size)
+            moves.forEachIndexed { i, m ->
+                val b = Bead(m.color, cellX(m.from), cellY(m.from), i * step, -1)
+                b.fromSize = boardBead
+                trayBeads.add(b)
+            }
+            clearSelection()
+                relayoutTray()
+            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            return
+        }
+        // トレイのジュエルを色ごとに選ぶ
+        val half = slot / 2
+        val hit = trayBeads.firstOrNull { it.arrived && x in it.x - half..it.x + half && y in it.y - half..it.y + half }
+        selTrayColor = if (hit == null || hit.color == selTrayColor) -1 else hit.color
+        if (hit != null) performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
     }
 
     /** トレイ内のジュエルを色ごとにまとめて並べ直す。 */
@@ -264,7 +305,7 @@ class GameView(context: Context) : View(context) {
 
     private val needsFrame: Boolean
         get() = animating || sparks.isNotEmpty() || shakeTime > 0 || messageTime > 0 ||
-            state != State.PLAYING || showHint
+            state != State.PLAYING || showHint || selectedColor >= 0
 
     // ---------------------------------------------------------------- 入力
 
@@ -278,7 +319,11 @@ class GameView(context: Context) : View(context) {
                     startLevel()
                     return true
                 }
-                if (boardRect.contains(x, y)) onTapBoard(x, y)
+                when {
+                    boardRect.contains(x, y) -> onTapBoard(x, y)
+                    trayRect.contains(x, y) -> onTapTray(x, y)
+                    else -> clearSelection()
+                }
             }
             State.WON -> {
                 if (stateTime > 1.2f && overlayButton.contains(x, y)) startLevel()
@@ -435,20 +480,44 @@ class GameView(context: Context) : View(context) {
 
         val shaking = shakeTime > 0
         val ox = if (shaking) sin(shakeTime * 60f) * 3 * dp else 0f
+        val selColor = selectedColor
+        val selected = BooleanArray(n * n)
+        for (c in selGroup) selected[c] = true
+        val pulse = 0.5f + 0.5f * sin(time * 6f)
         for (i in 0 until n * n) {
             val cx = cellX(i)
             val cy = cellY(i)
             val j = game.jewel[i]
             if (j < 0 || incoming[i]) {
-                // 空きマス
+                // 空きマス(選んでいる色の正解マスは点滅させる)
                 paint.color = shade(level.palette[level.target[i]], 0.45f)
                 canvas.drawCircle(cx, cy, cell * 0.3f, paint)
+                if (selColor >= 0 && !incoming[i] && level.target[i] == selColor) {
+                    paint.color = Color.WHITE
+                    paint.alpha = (90 + 120 * pulse).toInt()
+                    canvas.drawCircle(cx, cy, cell * 0.18f, paint)
+                    paint.alpha = 255
+                }
                 continue
             }
             val dx = if (shaking && i in shakeGroup) ox else 0f
-            drawBead(canvas, j, cx + dx, cy, boardBead)
+            if (selected[i]) {
+                paint.color = Color.WHITE
+                paint.alpha = (140 + 100 * pulse).toInt()
+                canvas.drawCircle(cx, cy - cell * 0.08f, cell * 0.5f, paint)
+                paint.alpha = 255
+                drawBead(canvas, j, cx + dx, cy - cell * 0.08f, boardBead * 1.08f)
+            } else {
+                drawBead(canvas, j, cx + dx, cy, boardBead)
+            }
         }
     }
+
+    private val selectedColor: Int
+        get() = when {
+            selGroup.isNotEmpty() -> game.jewel[selGroup[0]]
+            else -> selTrayColor
+        }
 
     private fun drawTray(canvas: Canvas) {
         paint.color = 0x33000000
@@ -457,6 +526,16 @@ class GameView(context: Context) : View(context) {
         canvas.drawRoundRect(tmpRect, 18 * dp, 18 * dp, paint)
         paint.color = 0xFFFFF1E4.toInt()
         canvas.drawRoundRect(trayRect, 18 * dp, 18 * dp, paint)
+        if (selGroup.isNotEmpty()) {
+            // 盤面のジュエルを選んでいる間は、トレイにも置けることを示す
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 3 * dp
+            paint.color = 0xFF8E5CF0.toInt()
+            paint.alpha = (120 + 120 * (0.5f + 0.5f * sin(time * 6f))).toInt()
+            canvas.drawRoundRect(trayRect, 18 * dp, 18 * dp, paint)
+            paint.style = Paint.Style.FILL
+            paint.alpha = 255
+        }
 
         val full = game.trayTotal
         for (i in 0 until game.capacity) {
@@ -473,12 +552,23 @@ class GameView(context: Context) : View(context) {
             paint.color = 0x14000000
             canvas.drawRoundRect(tmpRect, r * 0.4f, r * 0.4f, paint)
         }
-        for (b in trayBeads) if (b.arrived) drawBead(canvas, b.color, b.x, b.y, trayBead)
+        for (b in trayBeads) {
+            if (!b.arrived) continue
+            if (b.color == selTrayColor) {
+                paint.color = Color.WHITE
+                paint.alpha = (140 + 100 * (0.5f + 0.5f * sin(time * 6f))).toInt()
+                canvas.drawCircle(b.x, b.y - slot * 0.08f, slot * 0.5f, paint)
+                paint.alpha = 255
+                drawBead(canvas, b.color, b.x, b.y - slot * 0.08f, trayBead * 1.08f)
+            } else {
+                drawBead(canvas, b.color, b.x, b.y, trayBead)
+            }
+        }
 
         textPaint.textSize = 12 * dp
         textPaint.color = 0xFF9A7B5C.toInt()
         canvas.drawText(
-            "トレイ $full / ${game.capacity}   正しい色のマスに並べよう",
+            "トレイ $full / ${game.capacity}   選んで → 空きマスかトレイをタップ",
             trayRect.centerX(), trayRect.bottom + 18 * dp, textPaint,
         )
     }
@@ -507,10 +597,24 @@ class GameView(context: Context) : View(context) {
     }
 
     private fun drawHint(canvas: Canvas) {
-        // 最初の間違ったジュエルの位置を指す
-        val c = (0 until game.n * game.n).firstOrNull { game.jewel[it] >= 0 && !game.isCorrect(it) } ?: return
-        val cx = cellX(c)
-        val cy = cellY(c)
+        // 1: 間違ったジュエルを指す / 2: 選んだら、その色の空きマスかトレイを指す
+        val sc = selectedColor
+        val cx: Float
+        val cy: Float
+        if (sc < 0) {
+            val c = (0 until game.n * game.n).firstOrNull { game.jewel[it] >= 0 && !game.isCorrect(it) } ?: return
+            cx = cellX(c)
+            cy = cellY(c)
+        } else {
+            val e = (0 until game.n * game.n).firstOrNull { game.jewel[it] == -1 && level.target[it] == sc }
+            if (e != null) {
+                cx = cellX(e)
+                cy = cellY(e)
+            } else {
+                cx = slotLeft + slot / 2
+                cy = slotTop + slot / 2
+            }
+        }
         val pulse = time % 1f
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = 3 * dp

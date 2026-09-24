@@ -14,9 +14,9 @@ data class Transfer(val color: Int, val from: Int, val to: Int)
  *
  * ルール:
  * - 各マスには正解の色があり、ジュエルを正しい色のマスへ並べ替えるのが目的。
- * - 間違った位置のジュエルをタップすると、つながっている同色の(間違った位置の)ジュエルがまとめて動く。
- *   その色の正解マスが空いていれば直接そこへ、空きが無い分は下のトレイへ移動する。
- * - トレイにあるジュエルは、同じ色の正解マスが空くと自動でそこへ入る。
+ * - 間違った位置のジュエルを選ぶと、つながっている同色の(間違った位置の)ジュエルがまとめて選ばれる。
+ *   行き先として盤面の空きマスか、下のトレイ(保留場所)をプレイヤーが選ぶ。
+ * - トレイのジュエルは色ごとに選び、盤面の空きマスへ出せる。
  * - 全マスが正しい色で埋まればクリア。
  */
 class Game(val level: Level, val capacity: Int = 65) {
@@ -68,55 +68,82 @@ class Game(val level: Level, val capacity: Int = 65) {
         return queue.copyOf(tail)
     }
 
-    /**
-     * cell のジュエルのグループを動かす。
-     * 盤面の空いている正解マスを優先し、残りはトレイへ。どちらも無くなったら残りはその場に留まる。
-     */
-    fun move(cell: Int): List<Transfer> {
+    /** 盤面のグループを下のトレイへ入れる。入りきらない分はその場に残る。 */
+    fun moveToTray(cell: Int): List<Transfer> {
         val group = groupAt(cell)
         if (group.isEmpty()) return emptyList()
         val color = jewel[cell]
-        val tx = cell % n
-        val ty = cell / n
-        val empties = (0 until n * n)
-            .filter { jewel[it] == -1 && level.target[it] == color }
-            .sortedBy { abs(it % n - tx) + abs(it / n - ty) }
-        var free = freeSlots
-        var e = 0
         val result = ArrayList<Transfer>()
-        for (g in group) {
-            val to = when {
-                e < empties.size -> empties[e++]
-                free > 0 -> { free--; -1 }
-                else -> break
-            }
+        for (g in group.take(freeSlots)) {
             jewel[g] = -1
-            if (to >= 0) {
-                jewel[to] = color
-            } else {
-                trayCount[color]++
-                if (color !in trayOrder) trayOrder.add(color)
-            }
-            result.add(Transfer(color, g, to))
+            trayCount[color]++
+            result.add(Transfer(color, g, -1))
+        }
+        if (result.isNotEmpty()) {
+            if (color !in trayOrder) trayOrder.add(color)
+            moves++
+        }
+        return result
+    }
+
+    /** 盤面のグループを、dest から続く空きマスへ移す。入りきらない分はその場に残る。 */
+    fun moveToBoard(cell: Int, dest: Int): List<Transfer> {
+        val group = groupAt(cell)
+        if (group.isEmpty()) return emptyList()
+        val color = jewel[cell]
+        val cells = fillCells(color, dest, group.size)
+        val result = ArrayList<Transfer>()
+        for ((k, to) in cells.withIndex()) {
+            val from = group[k]
+            jewel[from] = -1
+            jewel[to] = color
+            result.add(Transfer(color, from, to))
         }
         if (result.isNotEmpty()) moves++
         return result
     }
 
-    /** 空いたマスに、トレイから同じ色のジュエルを入れる。 */
-    fun autoFill(): List<Transfer> {
-        val result = ArrayList<Transfer>()
-        for (i in 0 until n * n) {
-            if (jewel[i] != -1) continue
-            val t = level.target[i]
-            if (trayCount[t] > 0) {
-                trayCount[t]--
-                jewel[i] = t
-                result.add(Transfer(t, -1, i))
+    /** トレイにある color のジュエルを、dest から続く空きマスへ出す。 */
+    fun moveFromTray(color: Int, dest: Int): List<Transfer> {
+        if (trayCount[color] == 0) return emptyList()
+        val cells = fillCells(color, dest, trayCount[color])
+        for (to in cells) jewel[to] = color
+        trayCount[color] -= cells.size
+        if (trayCount[color] == 0) trayOrder.remove(color)
+        if (cells.isNotEmpty()) moves++
+        return cells.map { Transfer(color, -1, it) }
+    }
+
+    /**
+     * dest から始めて埋める空きマス(最大 limit 個、近い順)。
+     * dest がその色の正解マスなら、つながった正解マスだけを埋める。そうでなければ空きマスを順に埋める。
+     */
+    fun fillCells(color: Int, dest: Int, limit: Int): List<Int> {
+        if (jewel[dest] != -1 || limit <= 0) return emptyList()
+        val onlyCorrect = level.target[dest] == color
+        val seen = BooleanArray(n * n)
+        val queue = IntArray(n * n)
+        var head = 0
+        var tail = 0
+        queue[tail++] = dest
+        seen[dest] = true
+        while (head < tail && tail < limit) {
+            val cur = queue[head++]
+            val x = cur % n
+            val y = cur / n
+            for (d in 0 until 4) {
+                if (tail >= limit) break
+                val nx = x + DX[d]
+                val ny = y + DY[d]
+                if (nx !in 0 until n || ny !in 0 until n) continue
+                val ni = ny * n + nx
+                if (seen[ni] || jewel[ni] != -1) continue
+                if (onlyCorrect && level.target[ni] != color) continue
+                seen[ni] = true
+                queue[tail++] = ni
             }
         }
-        trayOrder.removeAll { trayCount[it] == 0 }
-        return result
+        return queue.take(tail)
     }
 
     private fun abs(v: Int) = if (v < 0) -v else v
