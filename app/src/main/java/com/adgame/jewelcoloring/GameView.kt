@@ -144,13 +144,11 @@ class GameView(context: Context) : View(context) {
 
         // 空きマス: 選んでいるジュエルをここへ移す
         val moves = when {
-            selGroup.isNotEmpty() -> game.moveToBoard(selGroup[0], c)
+            selGroup.isNotEmpty() -> game.moveToBoard(selGroup, c)
             selTrayColor >= 0 -> game.moveFromTray(selTrayColor, c)
             else -> return
         }
-        val total = if (selGroup.isNotEmpty()) selGroup.size else moves.size
         if (moves.isEmpty()) return
-        if (moves.size < total) showMessage("入りきらない分は元の場所に残りました")
         val step = min(0.025f, 0.6f / moves.size)
         moves.forEachIndexed { i, m ->
             val b: Bead
@@ -170,15 +168,25 @@ class GameView(context: Context) : View(context) {
             incoming[m.to] = true
             flyers.add(b)
         }
-        clearSelection()
+        keepLeftover(moves)
         relayoutTray()
         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+    }
+
+    /** 入りきらなかった分は、選んだ(浮いた)状態のまま残して続けて置けるようにする。 */
+    private fun keepLeftover(moves: List<Transfer>) {
+        if (selGroup.isNotEmpty()) {
+            val moved = moves.mapTo(HashSet()) { it.from }
+            selGroup = selGroup.filter { it !in moved }.toIntArray()
+        } else if (selTrayColor >= 0 && game.trayCount[selTrayColor] == 0) {
+            selTrayColor = -1
+        }
     }
 
     private fun onTapTray(x: Float, y: Float) {
         if (selGroup.isNotEmpty()) {
             // 選んでいる盤面のジュエルをトレイへ
-            val moves = game.moveToTray(selGroup[0])
+            val moves = game.moveToTray(selGroup)
             if (moves.isEmpty()) {
                 shakeGroup = selGroup
                 shakeTime = 0.4f
@@ -186,15 +194,14 @@ class GameView(context: Context) : View(context) {
                 performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                 return
             }
-            if (moves.size < selGroup.size) showMessage("トレイがいっぱいです")
             val step = min(0.025f, 0.6f / moves.size)
             moves.forEachIndexed { i, m ->
                 val b = Bead(m.color, cellX(m.from), cellY(m.from), i * step, -1)
                 b.fromSize = boardBead
                 trayBeads.add(b)
             }
-            clearSelection()
-                relayoutTray()
+            keepLeftover(moves)
+            relayoutTray()
             performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
             return
         }

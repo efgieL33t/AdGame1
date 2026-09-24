@@ -44,11 +44,11 @@ class GameTest {
         for (c in cells) {
             if (game.jewel[c] < 0 || game.isCorrect(c)) continue
             val e = emptyCorrect(game.jewel[c])
-            if (e != null && game.moveToBoard(c, e).isNotEmpty()) return true
+            if (e != null && game.moveToBoard(game.groupAt(c), e).isNotEmpty()) return true
         }
         for (c in cells) {
             if (game.jewel[c] < 0 || game.isCorrect(c)) continue
-            if (game.moveToTray(c).isNotEmpty()) return true
+            if (game.moveToTray(game.groupAt(c)).isNotEmpty()) return true
         }
         return false
     }
@@ -59,9 +59,9 @@ class GameTest {
         val level = Level(2, intArrayOf(0, 0, 1, 1), intArrayOf(1, 1, 0, 0), intArrayOf(0, 1))
         val game = Game(level, capacity = 2)
         // 上段の1をトレイへ
-        assertEquals(listOf(Transfer(1, 0, -1), Transfer(1, 1, -1)), game.moveToTray(0))
+        assertEquals(listOf(Transfer(1, 0, -1), Transfer(1, 1, -1)), game.moveToTray(game.groupAt(0)))
         // 下段の0を空いた上段へ直接
-        assertEquals(setOf(0, 1), game.moveToBoard(2, 0).map { it.to }.toSet())
+        assertEquals(setOf(0, 1), game.moveToBoard(game.groupAt(2), 0).map { it.to }.toSet())
         // トレイの1を下段へ(自動では動かない)
         assertEquals(2, game.trayCount[1])
         assertEquals(2, game.moveFromTray(1, 3).size)
@@ -74,8 +74,8 @@ class GameTest {
         // 正解: 0 1 / 1 1   初期: 1 0 / 1 1。左上を空けて、右上の0を直接そこへ移す
         val level = Level(2, intArrayOf(0, 1, 1, 1), intArrayOf(1, 0, 1, 1), intArrayOf(0, 1))
         val game = Game(level, capacity = 1)
-        assertEquals(1, game.moveToTray(0).size)   // 左上の1をトレイへ
-        assertEquals(listOf(Transfer(0, 1, 0)), game.moveToBoard(1, 0)) // 右上の0を左上へ
+        assertEquals(1, game.moveToTray(game.groupAt(0)).size)   // 左上の1をトレイへ
+        assertEquals(listOf(Transfer(0, 1, 0)), game.moveToBoard(game.groupAt(1), 0)) // 右上の0を左上へ
         assertEquals(1, game.moveFromTray(1, 1).size)
         assertTrue(game.isWon)
     }
@@ -84,8 +84,23 @@ class GameTest {
     fun trayFullMovesOnlyWhatFits() {
         val level = Level(2, intArrayOf(0, 0, 1, 1), intArrayOf(1, 1, 0, 0), intArrayOf(0, 1))
         val game = Game(level, capacity = 1)
-        assertEquals(1, game.moveToTray(0).size)
+        assertEquals(1, game.moveToTray(game.groupAt(0)).size)
         assertEquals(1, game.jewel.count { it == 1 })
+    }
+
+    @Test
+    fun leftoverCanBePlacedInNextMove() {
+        // 正解: 0 0 / 1 1   初期: 1 1 / 0 0。トレイ1枠なので1個だけ入り、残り1個を続けて入れる
+        val level = Level(2, intArrayOf(0, 0, 1, 1), intArrayOf(1, 1, 0, 0), intArrayOf(0, 1))
+        val game = Game(level, capacity = 1)
+        val group = game.groupAt(0)
+        val moved = game.moveToTray(group)
+        assertEquals(1, moved.size)
+        val rest = group.filter { c -> moved.none { it.from == c } }.toIntArray()
+        assertEquals(1, rest.size)
+        // 残りを空いたマスへ(正解ではないが置ける)
+        assertEquals(1, game.moveToBoard(rest, moved[0].from).size)
+        assertEquals(2, game.moves)
     }
 
     @Test

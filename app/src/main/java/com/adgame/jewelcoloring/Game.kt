@@ -68,13 +68,14 @@ class Game(val level: Level, val capacity: Int = 65) {
         return queue.copyOf(tail)
     }
 
-    /** 盤面のグループを下のトレイへ入れる。入りきらない分はその場に残る。 */
-    fun moveToTray(cell: Int): List<Transfer> {
-        val group = groupAt(cell)
-        if (group.isEmpty()) return emptyList()
-        val color = jewel[cell]
+    /**
+     * 選んだジュエル(同じ色)を下のトレイへ入れる。先頭から入るだけ入れ、残りはその場に残る。
+     * cells は groupAt の結果や、前回入りきらなかった残り。
+     */
+    fun moveToTray(cells: IntArray): List<Transfer> {
+        val color = selectionColor(cells) ?: return emptyList()
         val result = ArrayList<Transfer>()
-        for (g in group.take(freeSlots)) {
+        for (g in cells.take(freeSlots)) {
             jewel[g] = -1
             trayCount[color]++
             result.add(Transfer(color, g, -1))
@@ -86,21 +87,27 @@ class Game(val level: Level, val capacity: Int = 65) {
         return result
     }
 
-    /** 盤面のグループを、dest から続く空きマスへ移す。入りきらない分はその場に残る。 */
-    fun moveToBoard(cell: Int, dest: Int): List<Transfer> {
-        val group = groupAt(cell)
-        if (group.isEmpty()) return emptyList()
-        val color = jewel[cell]
-        val cells = fillCells(color, dest, group.size)
+    /** 選んだジュエルを、dest から続く空きマスへ移す。先頭から入るだけ入れ、残りはその場に残る。 */
+    fun moveToBoard(cells: IntArray, dest: Int): List<Transfer> {
+        val color = selectionColor(cells) ?: return emptyList()
+        val targets = fillCells(color, dest, cells.size)
         val result = ArrayList<Transfer>()
-        for ((k, to) in cells.withIndex()) {
-            val from = group[k]
+        for ((k, to) in targets.withIndex()) {
+            val from = cells[k]
             jewel[from] = -1
             jewel[to] = color
             result.add(Transfer(color, from, to))
         }
         if (result.isNotEmpty()) moves++
         return result
+    }
+
+    /** 選択が有効(空でなく、すべて同じ色の間違った位置のジュエル)ならその色。 */
+    private fun selectionColor(cells: IntArray): Int? {
+        if (cells.isEmpty()) return null
+        val color = jewel[cells[0]]
+        if (color < 0) return null
+        return if (cells.all { jewel[it] == color && !isCorrect(it) }) color else null
     }
 
     /** トレイにある color のジュエルを、dest から続く空きマスへ出す。 */
